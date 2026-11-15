@@ -30,6 +30,7 @@ final class SubProcess
         if ($process === false || !is_resource($stdout) || !is_resource($stderr)) {
             return null;
         }
+        $this->input->close($pipes);
         $output = (string) stream_get_contents($stdout);
         fclose($stdout);
         fclose($stderr);

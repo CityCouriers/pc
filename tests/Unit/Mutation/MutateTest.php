@@ -140,7 +140,7 @@ it('manifest: werdykt, polecenie, cele z licznikami i każdy mutant posortowany 
 });
 
 it('redakcja pliku widocznego jako plik, którego odczyt się nie udaje: plik bez zmian, bez awarii', function (): void {
-    SpyStream::register(sys_get_temp_dir() . '/pc-spy-nieuzywany.stderr');
+    SpyStream::register();
     SpyStream::$readFails = true;
     SpyStream::$files['pcspy://plik.log'] = 'D:\Praca\repo\a';
     try {

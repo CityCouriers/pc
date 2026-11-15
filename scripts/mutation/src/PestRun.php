@@ -8,8 +8,9 @@ use RuntimeException;
 
 /**
  * Uruchomienie procesu (Pest, git) z jawnym stdin (pusta rura zamknięta od razu). Wyjście trafia na bieżąco do logu
- * (i opcjonalnie na ekran); stderr idzie do pliku obok i jest dopisywany na końcu logu (na Windows nie da się czekać
- * na dwie rury naraz).
+ * (i opcjonalnie na ekran); stderr idzie do pliku tymczasowego (`tmpfile()`: prawdziwy deskryptor, bez protokołu `file`,
+ * który podmienia wtyczka Pest Mutate, #73) i jest dopisywany na końcu logu (na Windows nie da się czekać na dwie rury
+ * naraz).
  */
 final class PestRun
 {
@@ -25,12 +26,17 @@ final class PestRun
         if ($log === false) {
             throw new RuntimeException('Nie można zapisać logu: ' . $logPath);
         }
-        // Interpolacja, nie konkatenacja: mutant gubiący ścieżkę logu pisałby plik „.stderr” w katalogu bieżącym.
-        $errorPath = "{$logPath}.stderr";
+        $errors = tmpfile();
+        if ($errors === false) {
+            fclose($log);
+
+            throw new RuntimeException('Nie można utworzyć pliku tymczasowego na stderr.');
+        }
         // Zmienna o nazwie z samych cyfr trafia do tablicy PHP jako klucz int; `proc_open` nie potrafi jej przekazać (#69).
         $environment = $env + array_filter(getenv(), is_string(...), ARRAY_FILTER_USE_KEY);
-        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $errorPath, 'w']], $pipes, $cwd, $environment);
+        $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => $errors], $pipes, $cwd, $environment);
         if (!is_resource($process)) {
+            fclose($errors);
             fclose($log);
 
             throw new RuntimeException('Nie można uruchomić procesu: ' . implode(' ', $command));
@@ -39,9 +45,9 @@ final class PestRun
         self::copy($pipes[1], $log, $echo);
         fclose($pipes[1]);
         $code = proc_close($process);
-        $errors = (string) @file_get_contents($errorPath);
-        @unlink($errorPath);
-        self::write($log, $errors, $echo);
+        rewind($errors);
+        self::write($log, (string) stream_get_contents($errors), $echo);
+        fclose($errors);
         fclose($log);
 
         return $code < 0 ? null : $code;

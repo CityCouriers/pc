@@ -99,7 +99,7 @@ it('nazwy klas mimo komentarzy przed nazwą, w przestrzeni globalnej i jednoczł
 });
 
 it('kontrola ujemna: cel widoczny jako plik, którego odczyt się nie udaje, to błąd z pełną ścieżką, nie pusty skrót', function (): void {
-    SpyStream::register(sys_get_temp_dir() . '/pc-spy-nieuzywany.stderr');
+    SpyStream::register();
     SpyStream::$readFails = true;
     try {
         [$message] = Warnings::collect(static function (): ?string {
