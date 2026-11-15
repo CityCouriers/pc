@@ -7,6 +7,8 @@ use CityCouriers\Pc\Engine\ProcessGit;
 use CityCouriers\Pc\Tests\Support\Child;
 use CityCouriers\Pc\Tests\Support\GitRepo;
 use CityCouriers\Pc\Tests\Support\GitStub;
+use CityCouriers\Pc\Tests\Support\ParentInput;
+use CityCouriers\Pc\Tests\Support\StdinScenarios;
 use CityCouriers\Pc\Tests\Support\Warnings;
 
 /**
@@ -182,7 +184,14 @@ it('resolveCommit przekazuje gitowi dokładnie: rev-parse --verify --quiet <rewi
     }
 });
 
-it('git dostaje EOF na stdin: hook fsmonitor czytający stdin kończy się od razu, a ProcessGit nie wisi', function (): void {
+/**
+ * `stagedFiles()` w repozytorium z hookiem `core.fsmonitor` czytającym stdin: hook dziedziczy stdin gita, więc długość
+ * odczytanych danych pokazuje, jaki stdin dostał git od `ProcessGit`. Zwraca pliki ze stage'a (JSON) i długość odczytu hooka.
+ *
+ * @return array{string, ?string}
+ */
+function processGitHookStdin(?string $parentInput): array
+{
     $repo = new GitRepo();
     $repo->commit(['a.txt' => "a\n"]);
     $repo->write('b.txt', "b\n");
@@ -194,12 +203,31 @@ it('git dostaje EOF na stdin: hook fsmonitor czytający stdin kończy się od ra
     $previous = getenv('PC_HOOK_MARK');
     try {
         putenv('PC_HOOK_MARK=' . $mark);
-        $files = (new ProcessGit($repo->path))->stagedFiles();
+        $files = $parentInput === null
+            ? StdinScenarios::run(StdinScenarios::STAGED_FILES, [$repo->path])
+            : ParentInput::call($parentInput, StdinScenarios::STAGED_FILES, $repo->path);
 
-        expect($files)->toBe(['b.txt'])
-            ->and(is_file($mark) ? file_get_contents($mark) : null)->toBe('0');
+        return [$files, is_file($mark) ? (string) file_get_contents($mark) : null];
     } finally {
         putenv($previous === false ? 'PC_HOOK_MARK' : 'PC_HOOK_MARK=' . $previous);
+        $repo->remove();
+    }
+}
+
+it('git dostaje EOF na stdin: hook fsmonitor czytający stdin kończy się od razu, a ProcessGit nie wisi', function (): void {
+    expect(processGitHookStdin(null))->toBe(['["b.txt"]', '0']);
+});
+
+it('git dostaje pusty stdin także wtedy, gdy stdin rodzica ma dane (hook fsmonitor czyta 0 bajtów)', function (): void {
+    expect(processGitHookStdin("dane\n"))->toBe(['["b.txt"]', '0']);
+});
+
+it('git dostaje pusty stdin także wtedy, gdy stdin rodzica ma dane (scenariusz w osobnym procesie php)', function (): void {
+    $repo = new GitRepo();
+    $repo->commit(['a.txt' => "a\n"]);
+    try {
+        expect(ParentInput::callInChild("dane\n", StdinScenarios::STAGED_FILES, $repo->path))->toBe('[]');
+    } finally {
         $repo->remove();
     }
 });

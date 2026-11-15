@@ -5,6 +5,8 @@ declare(strict_types=1);
 use CityCouriers\Pc\Process\EmptyInput;
 use CityCouriers\Pc\Scope\SubProcess;
 use CityCouriers\Pc\Tests\Support\Child;
+use CityCouriers\Pc\Tests\Support\ParentInput;
+use CityCouriers\Pc\Tests\Support\StdinScenarios;
 use CityCouriers\Pc\Tests\Support\Warnings;
 
 /**
@@ -79,4 +81,17 @@ it('Child::open zwraca tylko rurki wyjścia, stdin jest już zamknięty', functi
     fclose($pipes[2]);
 
     expect(proc_close($process))->toBe(0)->and($stdout)->toBe('0');
+});
+
+it('SubProcess (kod pakietu): potomek dostaje pusty stdin także wtedy, gdy stdin rodzica ma dane', function (): void {
+    expect(ParentInput::call("dane\n", StdinScenarios::SUB_PROCESS))->toBe('0');
+});
+
+it('SubProcess (kod pakietu): potomek dostaje pusty stdin także wtedy, gdy stdin rodzica ma dane (scenariusz w osobnym procesie php)', function (): void {
+    expect(ParentInput::callInChild("dane\n", StdinScenarios::SUB_PROCESS))->toBe('0');
+});
+
+it('ParentInput: scenariusz widzi na stdin podane dane, w procesie Pesta i w osobnym procesie php', function (): void {
+    expect(ParentInput::call("dane\n", StdinScenarios::READ_STDIN))->toBe("dane\n")
+        ->and(ParentInput::callInChild("inne\n", StdinScenarios::READ_STDIN))->toBe("inne\n");
 });

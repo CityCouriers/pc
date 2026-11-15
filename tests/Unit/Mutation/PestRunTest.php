@@ -219,3 +219,49 @@ it('copy (prywatna): błąd odczytu (fread daje false) kończy kopiowanie bez za
         unlink((string) $path);
     }
 });
+
+it('brak pliku tymczasowego (tmpfile i tempnam zwracają false) to wyjątek, a log jest zamknięty jawnie', function (): void {
+    // Katalog tymczasowy PHP jest zapamiętany w procesie, więc brak pliku tymczasowego wywołujemy wyczerpaniem deskryptorów
+    // (kopie stdout przez php://fd/1, bez protokołu file); log idzie przez SpyStream, który deskryptora nie zajmuje.
+    $thrown = static function (Closure $run): string {
+        try {
+            $run();
+        } catch (Throwable $exception) {
+            return $exception::class . ': ' . $exception->getMessage();
+        }
+
+        return 'bez wyjątku';
+    };
+    $program = [PHP_BINARY, '-r', 'echo "x";'];
+    $directory = sys_get_temp_dir();
+    SpyStream::register();
+    try {
+        // Rozgrzewka: po wyczerpaniu deskryptorów autoload nie ma czym otworzyć pliku klasy.
+        PestRun::run($program, $directory, [], 'pcspy://rozgrzewka.log', false);
+        PestRun::capture($program, $directory);
+        [$result] = Warnings::collect(static function () use ($thrown, $program, $directory): array {
+            $handles = [];
+            try {
+                while (($handle = fopen('php://fd/1', 'wb')) !== false) {
+                    $handles[] = $handle;
+                }
+                SpyStream::$events = [];
+                $run = $thrown(static fn() => PestRun::run($program, $directory, [], 'pcspy://bieg.log', false));
+                $events = SpyStream::$events;
+                $capture = $thrown(static fn() => PestRun::capture($program, $directory));
+            } finally {
+                foreach ($handles as $handle) {
+                    fclose($handle);
+                }
+            }
+
+            return [$run, $events, $capture];
+        });
+    } finally {
+        SpyStream::unregister();
+    }
+
+    expect($result[0])->toBe('RuntimeException: Nie można utworzyć pliku tymczasowego na stderr.')
+        ->and($result[1])->toBe(['open pcspy://bieg.log wb', 'close pcspy://bieg.log fclose'])
+        ->and($result[2])->toBe('RuntimeException: Nie można utworzyć pliku tymczasowego.');
+});
