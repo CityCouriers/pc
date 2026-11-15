@@ -173,7 +173,8 @@ it('log, którego nie da się otworzyć, to wyjątek ze ścieżką logu', functi
     }
 });
 
-it('program, którego nie da się uruchomić: na Windows wyjątek z całym poleceniem, gdzie indziej kod różny od 0', function (): void {
+// Polecenie jako tablica: Windows (CreateProcess) i Linux (posix_spawn) zgłaszają brak programu już w proc_open.
+it('program, którego nie da się uruchomić: wyjątek z całym poleceniem', function (): void {
     $repo = new GitRepo();
     try {
         [$result] = Warnings::collect(static function () use ($repo): int|string|null {
@@ -184,11 +185,7 @@ it('program, którego nie da się uruchomić: na Windows wyjątek z całym polec
             }
         });
 
-        if (PHP_OS_FAMILY === 'Windows') {
-            expect($result)->toBe('Nie można uruchomić procesu: pc-nie-ma-takiego-programu a b');
-        } else {
-            expect(is_int($result) && $result !== 0)->toBeTrue();
-        }
+        expect($result)->toBe('Nie można uruchomić procesu: pc-nie-ma-takiego-programu a b');
     } finally {
         $repo->remove();
     }
