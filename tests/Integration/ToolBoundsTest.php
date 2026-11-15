@@ -90,10 +90,16 @@ it('pusty powód wyjątku nie zwalnia pakietu', function (): void {
     expect($exit)->toBe(1);
 });
 
-it('alternatywa w ograniczeniu liczy się po najniższej dolnej granicy', function (): void {
-    [$exit, $output] = runBounds(['a/b' => '^1.2 || ^2.0'], ['a/b' => '2.0.0'], ['a/b' => '2.0.0']);
+it('alternatywa albo unia ograniczeń bez wyjątku daje kod 1, także gdy najniższy człon równa się najnowszej stabilnej', function (string $constraint): void {
+    [$exit, $output] = runBounds(['a/b' => $constraint], ['a/b' => '5.3.5'], ['a/b' => '5.3.5']);
 
-    expect($exit)->toBe(1)->and($output)->toContain('dolna granica 1.2.0 różna od najnowszej stabilnej 2.0.0');
+    expect($exit)->toBe(1)->and($output)->toContain('a/b: ograniczenie "' . $constraint . '" bez pewnej dolnej granicy');
+})->with(['^5.3.5 || ^6.0', '^5.3.5 | ^6.0', '^6.0 || ^5.3.5', '^5.3.5 || ^5.3.5', '^5.3.5 ^6.0']);
+
+it('alternatywa z wyjątkiem w pliku wyjątków jest dopuszczona', function (): void {
+    [$exit] = runBounds(['a/b' => '^5.3.5 || ^6.0'], ['a/b' => '5.3.5'], ['a/b' => '5.3.5'], ['a/b' => 'powód']);
+
+    expect($exit)->toBe(0);
 });
 
 it('brak najnowszej stabilnej wersji bez wyjątku daje kod 1', function (): void {
