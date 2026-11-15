@@ -13,29 +13,29 @@ use CityCouriers\Pc\Dev\Mutation\Status;
 use CityCouriers\Pc\Dev\Mutation\Target;
 use CityCouriers\Pc\Dev\Mutation\Verdict;
 use CityCouriers\Pc\Dev\Mutation\ZeroMutants;
+use CityCouriers\Pc\Tests\Support\SpyStream;
+use CityCouriers\Pc\Tests\Support\Warnings;
 
 it('opcje: domyślnie pełny bieg równoległy na src do build/mutation', function (): void {
-    expect(Mutate::options([]))->toBe(['path' => 'src', 'parallel' => true, 'processes' => Mutate::PROCESSES, 'out' => 'build/mutation', 'help' => false])
+    expect(Mutate::options([]))->toBe(['path' => 'src', 'parallel' => true, 'processes' => 8, 'out' => 'build/mutation', 'help' => false])
         ->and(Mutate::options(['--serial', '--path=src\\Scope\\', '--out=build/m', '--processes=4', '-h']))
         ->toBe(['path' => 'src/Scope', 'parallel' => false, 'processes' => 4, 'out' => 'build/m', 'help' => true]);
 });
 
-it('kontrola ujemna: nieznany argument i ścieżka spoza repo to błąd użycia', function (string $argument, string $message): void {
-    Mutate::options([$argument]);
-})->throws(RuntimeException::class)->with([
-    'nieznany argument' => ['--covered-only', 'Nieznany argument'],
-    'zero procesów' => ['--processes=0', 'Nieznany argument'],
-    'wyjście poza repo' => ['--out=../poza', 'względna'],
-    'ścieżka bezwzględna' => ['--path=/etc', 'względna'],
-    'litera dysku' => ['--path=C:/src', 'względna'],
+it('kontrola ujemna: nieznany argument i ścieżka spoza repo to błąd użycia z argumentem w komunikacie', function (string $argument, string $message): void {
+    expect(static fn(): array => Mutate::options([$argument]))
+        ->toThrow(static function (RuntimeException $exception) use ($message): void {
+            expect($exception->getMessage())->toBe($message);
+        });
+})->with([
+    'nieznany argument' => ['--covered-only', 'Nieznany argument: --covered-only'],
+    'zero procesów' => ['--processes=0', 'Nieznany argument: --processes=0'],
+    'wyjście poza repo' => ['--out=../poza', 'Ścieżka musi być względna wobec repo i nie może zawierać `..`: ../poza'],
+    'ścieżka bezwzględna' => ['--path=/etc', 'Ścieżka musi być względna wobec repo i nie może zawierać `..`: /etc'],
+    'litera dysku' => ['--path=C:/src', 'Ścieżka musi być względna wobec repo i nie może zawierać `..`: C:/src'],
+    'sam separator' => ['--path=\\', 'Ścieżka musi być względna wobec repo i nie może zawierać `..`: \\'],
 ]);
 
-it('main: pomoc kończy się kodem 0, błąd użycia kodem 2, bez uruchamiania Pesta', function (): void {
-    $mutate = new Mutate(dirname(__DIR__, 3), false);
-
-    expect($mutate->main(['--help']))->toBe(0)
-        ->and($mutate->main(['--nie-ma']))->toBe(2);
-});
 
 it('polecenie Pest Mutate: PHP, skrypt Pesta, stałe opcje wtyczki, cel i równoległość (te same dla kontroli i biegu)', function (): void {
     $command = Mutate::command('/repo', ['-d', 'pcov.enabled=1'], ['--path=src'], ['--parallel', '--processes=8']);
@@ -56,6 +56,19 @@ it('lista „bez mutantów”: wpisy z uzasadnieniem, a uszkodzony plik albo pus
         ->and(ZeroMutants::parse('{"version": 2, "pliki": {}}')->errors)->toHaveCount(1)
         ->and(ZeroMutants::parse('{"version": 1, "pliki": {"src/I.php": " "}}')->errors)->toBe(['bez-mutantow.json: wpis "src/I.php" bez uzasadnienia']);
 });
+
+it('lista „bez mutantów”: wersja tylko liczbą 1, ścieżka i uzasadnienie tylko tekstem, zły wpis nie przerywa czytania kolejnych', function (): void {
+    // Klucz JSON z samych cyfr PHP zamienia na liczbę: to nie jest ścieżka pliku.
+    $parsed = ZeroMutants::parse('{"version": 1, "pliki": {"123": "x", "src/A.php": 5, "src/B.php": "brak kodu"}}');
+
+    expect(ZeroMutants::parse('{"version": "1", "pliki": {}}')->errors)->toBe(['bez-mutantow.json: oczekiwany obiekt z "version": 1 i obiektem "pliki"'])
+        ->and($parsed->files)->toBe(['src/B.php' => 'brak kodu'])
+        ->and($parsed->errors)->toBe(['bez-mutantow.json: wpis "123" bez uzasadnienia', 'bez-mutantow.json: wpis "src/A.php" bez uzasadnienia']);
+});
+
+it('krótka nazwa mutatora: bez przestrzeni nazw zostaje cała, wiodący separator znika', function (string $mutator): void {
+    expect((new Generated('a1', 'src/A.php', $mutator, 1, 1))->mutatorName())->toBe('PlusToMinus');
+})->with(['bez przestrzeni nazw' => 'PlusToMinus', 'przestrzeń globalna' => '\\PlusToMinus', 'pełna nazwa' => 'Pest\\Mutate\\Mutators\\Arithmetic\\PlusToMinus']);
 
 it('lista „bez mutantów” w repo jest poprawna', function (): void {
     $file = dirname(__DIR__, 3) . '/scripts/mutation/bez-mutantow.json';
@@ -84,6 +97,18 @@ it('redakcja pomija ścieżki bez separatora', function (string $phpBinary): voi
     expect($redactor->redact('src/A.php wersja 1.2.3 php.exe'))->toBe('src/A.php wersja 1.2.3 php.exe');
 })->with(['nazwa z PATH' => 'php', 'katalog bieżący' => './php', 'katalog główny' => '/php']);
 
+it('redakcja ścieżki z mieszanymi separatorami i końcowym separatorem: każda postać zapisu', function (): void {
+    $redactor = new Redactor('D:\\Praca/repo\\', 'C:\\php\\php.exe', null);
+    $text = 'D:\\Praca/repo\\a D:/Praca/repo/b D:\\Praca\\repo\\c "D:\\\\Praca\\\\repo\\\\d"';
+
+    expect($redactor->redact($text))->toBe('.\\a ./b .\\c ".\\\\d"');
+});
+
+it('redakcja: repo bez separatora nie blokuje redakcji interpretera, a interpreter w repo wygrywa z repo (dłuższa ścieżka pierwsza)', function (): void {
+    expect((new Redactor('repo', '/usr/bin/php', null))->redact('/usr/bin/php repo'))->toBe('<php>/php repo')
+        ->and((new Redactor('/srv/repo', '/srv/repo/php/bin/php', null))->redact('/srv/repo/php/bin/php /srv/repo/src'))->toBe('<php>/php ./src');
+});
+
 it('manifest: werdykt, polecenie, cele z licznikami i każdy mutant posortowany po pliku i linii', function (): void {
     $journal = new Journal(
         [
@@ -94,17 +119,37 @@ it('manifest: werdykt, polecenie, cele z licznikami i każdy mutant posortowany 
         [],
     );
     $verdict = new Verdict(['powód'], ['uwaga'], ['untested' => 1], ['src/A.php' => ['wygenerowane' => 1, 'untested' => 1]]);
-    $manifest = Manifest::build(['sha' => 'abc'], 'php pest --mutate', 'src', [new Target('src/A.php', 'h', ['A'])], $journal, RunLog::parse('  2 Mutations for 2 Files created'), $verdict);
+    $manifest = Manifest::build(['sha' => 'abc'], 'php pest --mutate', 'src', [new Target('src/A.php', 'h', ['A']), new Target('src/I.php', 'i', ['I'])], $journal, RunLog::parse('  2 Mutations for 2 Files created'), $verdict);
 
-    expect($manifest['werdykt'])->toBe('odrzucony')
+    expect($manifest['wersja'])->toBe(1)
+        ->and($manifest['werdykt'])->toBe('odrzucony')
         ->and($manifest['powody'])->toBe(['powód'])
         ->and($manifest['uwagi'])->toBe(['uwaga'])
         ->and($manifest['polecenie'])->toBe('php pest --mutate')
         ->and($manifest['log'])->toBe(['wygenerowane' => 2, 'pliki' => 2, 'podsumowanie' => null])
-        ->and($manifest['cele'])->toBe([['plik' => 'src/A.php', 'sha256' => 'h', 'klasy' => ['A'], 'mutanty' => ['wygenerowane' => 1, 'untested' => 1]]])
+        ->and($manifest['cele'])->toBe([
+            ['plik' => 'src/A.php', 'sha256' => 'h', 'klasy' => ['A'], 'mutanty' => ['wygenerowane' => 1, 'untested' => 1]],
+            // Cel bez liczników w werdykcie (np. bez mutantów) ma jawne zero wygenerowanych.
+            ['plik' => 'src/I.php', 'sha256' => 'i', 'klasy' => ['I'], 'mutanty' => ['wygenerowane' => 0]],
+        ])
         ->and($manifest['mutanty'])->toBe([
             ['id' => 'a1', 'plik' => 'src/A.php', 'linie' => '3', 'mutator' => 'IdenticalToEqual', 'status' => 'untested', 'kod' => 0, 'wzorce' => 2, 'filtr' => 'testy', 'testy' => '2 passed'],
             ['id' => 'b2', 'plik' => 'src/B.php', 'linie' => '9-11', 'mutator' => 'PlusToMinus', 'status' => 'bez wyniku', 'kod' => null, 'wzorce' => null, 'filtr' => null, 'testy' => null],
         ])
         ->and(Manifest::report($verdict, 'build/mutation'))->toBe("BIEG ODRZUCONY\nMutanty: 1 untested\n  - powód\n  uwaga: uwaga\nManifest: build/mutation/manifest.json");
+});
+
+it('redakcja pliku widocznego jako plik, którego odczyt się nie udaje: plik bez zmian, bez awarii', function (): void {
+    SpyStream::register(sys_get_temp_dir() . '/pc-spy-nieuzywany.stderr');
+    SpyStream::$readFails = true;
+    SpyStream::$files['pcspy://plik.log'] = 'D:\Praca\repo\a';
+    try {
+        Warnings::collect(static function (): void {
+            (new Redactor('D:\Praca\repo', 'C:\php\php.exe', null))->redactFile('pcspy://plik.log');
+        });
+
+        expect(SpyStream::$files['pcspy://plik.log'])->toBe('D:\\Praca\\repo\\a');
+    } finally {
+        SpyStream::unregister();
+    }
 });

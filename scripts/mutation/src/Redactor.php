@@ -57,8 +57,13 @@ final readonly class Redactor
 
     public function redactFile(string $path): void
     {
-        if (is_file($path)) {
-            file_put_contents($path, $this->redact((string) file_get_contents($path)));
+        if (!is_file($path)) {
+            return;
+        }
+        $content = file_get_contents($path);
+        // Plik, którego nie da się odczytać, zostaje bez zmian (a nie nadpisany pustą treścią).
+        if (is_string($content)) {
+            file_put_contents($path, $this->redact($content));
         }
     }
 }

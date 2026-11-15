@@ -16,6 +16,8 @@ final class Acceptance
     /**
      * @param list<Target> $targets cele z manifestu
      * @param list<string> $registry identyfikatory mutantów równoważnych z rejestru (ważne wpisy)
+     * @param array<string, string> $classifiedKills zabicia bez nieudanego testu sklasyfikowane z udokumentowaną
+     *        przyczyną: identyfikator → przyczyna (z rejestru, jak równoważne)
      * @param list<string> $controlFailures powody odrzucenia z kontroli (zerowej, dodatniej, tożsamościowej)
      */
     public static function evaluate(
@@ -26,13 +28,14 @@ final class Acceptance
         ?int $exitCode,
         ZeroMutants $zeroMutants,
         array $registry,
+        array $classifiedKills,
         array $controlFailures,
     ): Verdict {
         $reasons = [...$controlFailures, ...self::process($log, $exitCode), ...$journal->errors, ...$zeroMutants->errors];
         $reasons = [...$reasons, ...self::completeness($journal, $log), ...self::targets($targets, $scope, $journal, $zeroMutants)];
-        $reasons = [...$reasons, ...self::results($journal, $registry), ...self::silentKills($journal)];
+        $reasons = [...$reasons, ...self::results($journal, $registry), ...self::kills($journal, $classifiedKills)];
 
-        return new Verdict($reasons, self::notes($journal), self::counts($journal), self::perTarget($targets, $journal));
+        return new Verdict($reasons, self::notes($journal, $classifiedKills), self::counts($journal), self::perTarget($targets, $journal));
     }
 
     /**
@@ -85,9 +88,10 @@ final class Acceptance
                 $alive[$id] = $outcome->status->value;
             }
         }
-        ksort($alive);
+        // Porządek tekstowy: identyfikator szesnastkowy może wyglądać jak liczba („1e2” i „01e2” są równe liczbowo).
+        ksort($alive, SORT_STRING);
         $listed = $log->listed;
-        ksort($listed);
+        ksort($listed, SORT_STRING);
         if ($log->summary !== null && $alive !== $listed) {
             $reasons[] = sprintf('niezgodna lista żywych mutantów: log wymienia %d, dziennik ma %d', count($listed), count($alive));
         }
@@ -159,52 +163,41 @@ final class Acceptance
     }
 
     /**
-     * Wszystkie zabicia bez uruchomionego testu to obraz fałszywych zabić (proces mutanta pada na starcie, zanim Pest
-     * cokolwiek uruchomi), a nie wynik mutacji. Pojedyncze takie zabicia są możliwe (np. błąd krytyczny PHP po zmianie
-     * widoczności metody interfejsu), więc trafiają tylko do uwag.
+     * Każde niezweryfikowane zabicie odrzuca bieg, chyba że ma sklasyfikowaną przyczynę.
+     *
+     * @param array<string, string> $classified
      *
      * @return list<string>
      */
-    private static function silentKills(Journal $journal): array
+    private static function kills(Journal $journal, array $classified): array
     {
-        $tested = array_filter($journal->outcomes, static fn(Outcome $outcome): bool => $outcome->status === Status::Tested);
-        $silent = self::silentKillCodes($journal);
-        if ($tested === [] || array_sum($silent) !== count($tested)) {
+        $unclassified = [];
+        foreach (self::unverifiedKills($journal) as $id) {
+            if (!isset($classified[$id])) {
+                $unclassified[] = $id;
+            }
+        }
+        if ($unclassified === []) {
             return [];
         }
 
-        return [sprintf('wszystkie zabicia (%d) bez uruchomionego testu (%s): proces mutanta pada przed testami, wynik byłby fałszywy', count($tested), self::codes($silent))];
+        return [sprintf('zabicia bez nieudanego testu i bez sklasyfikowanej przyczyny: %d mutantów (%s); nie dowodzą skutku mutacji', count($unclassified), self::sample($unclassified))];
     }
 
     /**
-     * @return array<string, int> kod wyjścia → liczba zabić bez linii podsumowania testów
-     */
-    private static function silentKillCodes(Journal $journal): array
-    {
-        $codes = [];
-        foreach ($journal->outcomes as $outcome) {
-            if ($outcome->status === Status::Tested && $outcome->summary === null) {
-                $code = 'kod ' . ($outcome->exitCode ?? '?');
-                $codes[$code] = ($codes[$code] ?? 0) + 1;
-            }
-        }
-        ksort($codes);
-
-        return $codes;
-    }
-
-    /**
-     * Zabicie, w którym żaden test nie zawiódł (np. „6 warnings, 107 passed”), pochodzi z trybu `failOn*` konfiguracji,
-     * a nie z asercji. Przy ostrzeżeniach z samego wrappera plików wtyczki (#73) to fałszywe zabicie, ukryty żywy mutant.
+     * Zabicia bez nieudanego testu: bez linii podsumowania testów (proces mutanta padł przed raportem, np. błąd krytyczny
+     * PHP albo awaria startu) albo z podsumowaniem bez „failed” (np. same ostrzeżenia z trybu `failOn*`; przy
+     * ostrzeżeniach z samego wrappera plików wtyczki to fałszywe zabicie, #73). Kod wyjścia różny od zera nie wskazuje,
+     * czy padł test, więc żadne z nich nie jest dowodem zabicia.
      *
      * @return list<string>
      */
-    private static function killsWithoutFailure(Journal $journal): array
+    private static function unverifiedKills(Journal $journal): array
     {
         $ids = [];
-        foreach ($journal->outcomes as $id => $outcome) {
-            if ($outcome->status === Status::Tested && $outcome->summary !== null && !str_contains($outcome->summary, 'failed')) {
-                $ids[] = (string) $id;
+        foreach ($journal->outcomes as $outcome) {
+            if ($outcome->status === Status::Tested && !str_contains((string) $outcome->summary, 'failed')) {
+                $ids[] = $outcome->id;
             }
         }
 
@@ -212,24 +205,12 @@ final class Acceptance
     }
 
     /**
-     * @param array<string, int> $codes
-     */
-    private static function codes(array $codes): string
-    {
-        $parts = [];
-        foreach ($codes as $code => $count) {
-            $parts[] = $code . ': ' . $count;
-        }
-
-        return implode(', ', $parts);
-    }
-
-    /**
+     * @param array<string, string> $classified
+     *
      * @return list<string>
      */
-    private static function notes(Journal $journal): array
+    private static function notes(Journal $journal, array $classified): array
     {
-        $silent = self::silentKillCodes($journal);
         $filters = [];
         foreach ($journal->outcomes as $outcome) {
             if ($outcome->filter !== 'testy' && $outcome->status !== Status::Uncovered) {
@@ -237,12 +218,10 @@ final class Acceptance
             }
         }
         $notes = [];
-        if ($silent !== []) {
-            $notes[] = sprintf('zabicia bez linii podsumowania testów (proces mutanta padł przed raportem, np. błąd krytyczny PHP): %d (%s)', array_sum($silent), self::codes($silent));
-        }
-        $withoutFailure = self::killsWithoutFailure($journal);
-        if ($withoutFailure !== []) {
-            $notes[] = sprintf('zabicia bez nieudanego testu (podsumowanie bez „failed”, np. same ostrzeżenia, #73): %d (%s)', count($withoutFailure), self::sample($withoutFailure));
+        foreach (self::unverifiedKills($journal) as $id) {
+            if (isset($classified[$id])) {
+                $notes[] = sprintf('zabicie bez nieudanego testu %s sklasyfikowane: %s', $id, $classified[$id]);
+            }
         }
         foreach ($filters as $mode => $count) {
             $notes[] = sprintf('filtr testów w trybie „%s” (za długi pełny filtr): %d mutantów', $mode, $count);

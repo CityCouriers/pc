@@ -25,7 +25,8 @@ final class PestRun
         if ($log === false) {
             throw new RuntimeException('Nie można zapisać logu: ' . $logPath);
         }
-        $errorPath = $logPath . '.stderr';
+        // Interpolacja, nie konkatenacja: mutant gubiący ścieżkę logu pisałby plik „.stderr” w katalogu bieżącym.
+        $errorPath = "{$logPath}.stderr";
         // Zmienna o nazwie z samych cyfr trafia do tablicy PHP jako klucz int; `proc_open` nie potrafi jej przekazać (#69).
         $environment = $env + array_filter(getenv(), is_string(...), ARRAY_FILTER_USE_KEY);
         $process = proc_open($command, [0 => ['pipe', 'r'], 1 => ['pipe', 'w'], 2 => ['file', $errorPath, 'w']], $pipes, $cwd, $environment);

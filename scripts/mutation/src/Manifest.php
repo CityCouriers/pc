@@ -11,7 +11,7 @@ namespace CityCouriers\Pc\Dev\Mutation;
  */
 final class Manifest
 {
-    public const int VERSION = 1;
+    private const int VERSION = 1;
 
     /**
      * @param array<string, mixed> $environment

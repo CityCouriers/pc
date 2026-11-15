@@ -44,17 +44,58 @@ it('ścieżka spoza repo zostaje bezwzględna', function (): void {
         ->and(Journal::relative('C:\\Repo\\src\\A.php', 'c:\\repo'))->toBe('src/A.php');
 });
 
-it('kontrola ujemna: każdy uszkodzony wiersz dziennika jest błędem, nie pominięciem', function (string $content, string $error): void {
-    $journal = Journal::parse($content, 'C:\\repo');
+/**
+ * Wiersz `generated` z podmienionymi polami; null usuwa pole.
+ *
+ * @param array<string, mixed> $changes
+ */
+function mutationGeneratedWith(array $changes): string
+{
+    $fields = array_merge(['event' => 'generated', 'id' => 'ab', 'file' => 'C:\\repo\\src\\A.php', 'mutator' => 'M', 'start_line' => 7, 'end_line' => 9], $changes);
 
-    expect(implode("\n", $journal->errors))->toContain($error);
+    return mutationJournalLine(array_filter($fields, static fn(mixed $value): bool => $value !== null));
+}
+
+/**
+ * Wiersz `generated` i po nim wiersz `result` z podmienionymi polami.
+ *
+ * @param array<string, mixed> $changes
+ */
+function mutationResultWith(array $changes): string
+{
+    $fields = array_merge(['event' => 'result', 'id' => 'ab', 'status' => 'tested', 'exit_code' => 1, 'patterns' => 2, 'filter' => 'testy', 'duration' => 1, 'summary' => '1 failed'], $changes);
+
+    return mutationGeneratedLine('ab') . "\n" . mutationJournalLine($fields);
+}
+
+it('kontrola ujemna: każdy uszkodzony wiersz dziennika jest błędem z numerem wiersza i identyfikatorem, nie pominięciem', function (string $content, string $error): void {
+    expect(Journal::parse($content, 'C:\\repo')->errors)->toBe([$error]);
 })->with([
-    'nie JSON' => ['{zepsute', 'wiersz 1: to nie jest obiekt JSON'],
-    'brak identyfikatora' => [mutationJournalLine(['event' => 'generated']), 'brak poprawnego identyfikatora'],
-    'nieznane zdarzenie' => [mutationJournalLine(['event' => 'inne', 'id' => 'ab']), 'nieznane zdarzenie'],
-    'mutant dwa razy' => [mutationGeneratedLine('ab') . "\n" . mutationGeneratedLine('ab'), 'wygenerowany dwa razy'],
-    'dwa wyniki' => [mutationGeneratedLine('ab') . "\n" . mutationResultLine('ab') . "\n" . mutationResultLine('ab'), 'ma dwa wyniki'],
-    'wynik bez wygenerowania' => [mutationResultLine('ab'), 'wynik mutanta ab bez wpisu o wygenerowaniu'],
-    'nieznany status' => [mutationGeneratedLine('ab') . "\n" . mutationResultLine('ab', 'zabity'), 'niepełny wynik mutanta ab'],
-    'niepełne wygenerowanie' => [mutationJournalLine(['event' => 'generated', 'id' => 'ab', 'file' => 'x']), 'niepełny wpis o wygenerowaniu'],
+    'nie JSON' => ['{zepsute', 'dziennik, wiersz 1: to nie jest obiekt JSON'],
+    'brak identyfikatora' => [mutationJournalLine(['event' => 'generated']), 'dziennik, wiersz 1: brak poprawnego identyfikatora mutanta'],
+    'nieznane zdarzenie' => [mutationJournalLine(['event' => 'inne', 'id' => 'ab']), 'dziennik, wiersz 1: nieznane zdarzenie'],
+    'mutant dwa razy' => [mutationGeneratedLine('ab') . "\n" . mutationGeneratedLine('ab'), 'dziennik, wiersz 2: mutant ab wygenerowany dwa razy'],
+    'dwa wyniki' => [mutationGeneratedLine('ab') . "\n" . mutationResultLine('ab') . "\n" . mutationResultLine('ab'), 'dziennik, wiersz 3: mutant ab ma dwa wyniki'],
+    'wynik bez wygenerowania' => [mutationResultLine('ab'), 'dziennik: wynik mutanta ab bez wpisu o wygenerowaniu'],
+    'nieznany status' => [mutationGeneratedLine('ab') . "\n" . mutationResultLine('ab', 'zabity'), 'dziennik, wiersz 2: niepełny wynik mutanta ab'],
+    'niepełne wygenerowanie' => [mutationJournalLine(['event' => 'generated', 'id' => 'ab', 'file' => 'x']), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'bez pliku' => [mutationGeneratedWith(['file' => null]), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'plik liczbą' => [mutationGeneratedWith(['file' => 5]), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'pusty plik' => [mutationGeneratedWith(['file' => '']), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'mutator liczbą' => [mutationGeneratedWith(['mutator' => 5]), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'pusty mutator' => [mutationGeneratedWith(['mutator' => '']), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'linia tekstem' => [mutationGeneratedWith(['start_line' => '7']), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'linia ułamkiem' => [mutationGeneratedWith(['end_line' => 9.5]), 'dziennik, wiersz 1: niepełny wpis o wygenerowaniu mutanta ab'],
+    'kod wyjścia fałszem' => [mutationResultWith(['exit_code' => false]), 'dziennik, wiersz 2: niepełny wynik mutanta ab'],
+    'kod wyjścia tekstem' => [mutationResultWith(['exit_code' => '1']), 'dziennik, wiersz 2: niepełny wynik mutanta ab'],
+    'podsumowanie fałszem' => [mutationResultWith(['summary' => false]), 'dziennik, wiersz 2: niepełny wynik mutanta ab'],
 ]);
+
+it('puste i białe wiersze dziennika są pomijane bez przerywania czytania; wynik bez kodu i bez podsumowania (przerwany proces) jest poprawny', function (): void {
+    $journal = Journal::parse(implode("\n", [mutationGeneratedLine('ab'), '  ', '', mutationJournalLine(['event' => 'result', 'id' => 'ab', 'status' => 'timeout', 'exit_code' => null, 'patterns' => 0, 'filter' => '', 'duration' => 3, 'summary' => null])]), 'C:\\repo');
+
+    expect($journal->errors)->toBe([])
+        ->and($journal->outcomes['ab']->exitCode)->toBeNull()
+        ->and($journal->outcomes['ab']->summary)->toBeNull()
+        ->and($journal->outcomes['ab']->duration)->toBe(3.0);
+});

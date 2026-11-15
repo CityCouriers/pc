@@ -12,7 +12,7 @@ final readonly class Generated
     public function __construct(
         public string $id,
         public string $file,
-        public string $mutator,
+        private string $mutator,
         public int $startLine,
         public int $endLine,
     ) {}

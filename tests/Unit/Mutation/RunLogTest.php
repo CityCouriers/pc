@@ -30,8 +30,35 @@ it('czyta liczbę wygenerowanych, podsumowanie i identyfikatory żywych mutantó
         ->and($log->summary)->toBe(['untested' => 27, 'uncovered' => 296, 'timeout' => 2, 'tested' => 1676])
         ->and($log->listed)->toBe(['f07273c0557b0fe6' => 'untested', '270b75c7d44caad8' => 'uncovered'])
         ->and($log->count('pending'))->toBe(0)
-        ->and($log->count('tested'))->toBe(1676);
+        ->and($log->count('tested'))->toBe(1676)
+        ->and($log->tests)->toBe('376 passed (1309 assertions)')
+        ->and($log->passed())->toBe(376);
 });
+
+it('podsumowanie testów to pierwsza linia „Tests:” (zestaw początkowy), bez kodów kolorów; bez takiej linii null', function (): void {
+    expect(RunLog::parse("  \e[90mTests:\e[39m    5 passed (9 assertions)\n  Tests:    1 failed")->tests)->toBe('5 passed (9 assertions)')
+        ->and(RunLog::parse('  5 Mutations for 1 Files created')->tests)->toBeNull();
+});
+
+it('liczba zaliczonych testów tylko z pełnego podsumowania „N passed (M assertions)”, inaczej null', function (?string $tests, ?int $passed): void {
+    expect((new RunLog(null, null, null, [], $tests))->passed())->toBe($passed);
+})->with([
+    'wszystkie zaliczone' => ['376 passed (1309 assertions)', 376],
+    'jedna asercja' => ['1 passed (1 assertion)', 1],
+    'brak podsumowania' => [null, null],
+    'zero testów' => ['0 passed (0 assertions)', null],
+    'zero z przodu' => ['0376 passed (1309 assertions)', null],
+    'największy int' => [PHP_INT_MAX . ' passed (1 assertion)', PHP_INT_MAX],
+    'tuż poza zakresem int' => ['9223372036854775808 passed (1 assertion)', null],
+    'poza zakresem float' => [str_repeat('9', 400) . ' passed (1 assertion)', null],
+    'ucięte po liczbie' => ['376 passed', null],
+    'ucięte w nawiasie' => ['376 passed (1309', null],
+    'nieudany test' => ['1 failed, 375 passed (1309 assertions)', null],
+    'ostrzeżenia' => ['48 warnings, 328 passed (1200 assertions)', null],
+    'pominięty' => ['1 skipped, 375 passed (1309 assertions)', null],
+    'ryzykowny' => ['1 risky, 375 passed (1309 assertions)', null],
+    'niekompletny' => ['1 incomplete, 375 passed (1309 assertions)', null],
+]);
 
 it('bieg bez mutantów: zero wygenerowanych to liczba odczytana, nie brak', function (): void {
     $log = RunLog::parse("  0 Mutations for 0 Files created\n  Mutations: 0 tested\n  INFO  No mutations created.");
@@ -54,4 +81,22 @@ it('kontrola ujemna: licznik, którego nie da się odczytać, jest nullem, nigdy
 
 it('log bez linii o wygenerowaniu nie ma liczby mutantów', function (): void {
     expect(RunLog::parse('  Tests:    376 passed')->created)->toBeNull();
+});
+
+it('licznik kategorii z pustego podsumowania to zero, a nie brak', function (): void {
+    expect((new RunLog(0, 0, [], [], null))->count('tested'))->toBe(0);
+});
+
+it('liczby z logu biorą same cyfry także wtedy, gdy \s w bieżącym locale obejmuje twardą spację (Windows-1252, ISO-8859-1)', function (): void {
+    $previous = (string) setlocale(LC_CTYPE, '0');
+    $latin = setlocale(LC_CTYPE, 'English_United States.1252', 'en_US.ISO-8859-1', 'en_US.iso88591', 'de_DE.ISO-8859-1');
+    try {
+        // Twarda spacja na początku linii i po przecinku (tę po „Mutations:” zjada już pierwszy \s* wzorca linii).
+        $log = RunLog::parse("\xA012 Mutations for 3 Files created\n  Mutations: 1 untested,\xA05 tested");
+    } finally {
+        setlocale(LC_CTYPE, $previous);
+    }
+
+    // Bez takiego locale (C, UTF-8) twarda spacja nie jest białym znakiem, więc linii nie ma; liczba nigdy nie jest zerem.
+    expect([$log->created, $log->files, $log->summary])->toBe($latin === false ? [null, null, null] : [12, 3, ['untested' => 1, 'tested' => 5]]);
 });

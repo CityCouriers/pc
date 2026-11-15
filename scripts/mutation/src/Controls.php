@@ -9,7 +9,8 @@ namespace CityCouriers\Pc\Dev\Mutation;
  * - zerowa: mutant klasy `Przezycie` (testy bez asercji o wyniku) musi przeżyć; zabity = fałszywe zabicie;
  * - dodatnia: mutant klasy `Zabicie` (testy z asercją) musi zginąć z raportem nieudanego testu; przeżycie = testy w
  *   procesie mutanta nie biegną;
- * - tożsamościowa: pełny zestaw testów pod wrapperem plików wtyczki, bez mutacji, musi przejść (#73).
+ * - tożsamościowa: pełny zestaw testów pod wrapperem plików wtyczki, bez mutacji, musi przejść w całości i mieć tyle
+ *   testów, ile zestaw początkowy biegu mutacji (#73).
  * Obie klasy kontrolne mają po dwa testy, więc filtr procesu mutanta ma co najmniej dwa wzorce.
  */
 final class Controls
@@ -50,21 +51,34 @@ final class Controls
     }
 
     /**
+     * Fail-closed: przechodzi wyłącznie kod 0 z podsumowaniem „N passed (M assertions)” i tą samą liczbą testów co zestaw
+     * początkowy biegu mutacji. Brak albo ucięcie podsumowania, zero testów, ostrzeżenia, testy pominięte, ryzykowne
+     * i niekompletne oraz inna liczba testów (np. mniej, bo część zestawu nie wystartowała) odrzucają bieg.
+     *
+     * @param RunLog $run log kontroli tożsamościowej
+     * @param int|null $expected liczba testów zestawu początkowego biegu mutacji; null: nieznana
+     *
      * @return list<string>
      */
-    public static function identity(?int $exitCode, string $output): array
+    public static function identity(?int $exitCode, RunLog $run, ?int $expected): array
     {
-        if ($exitCode === 0) {
-            return [];
+        $passed = $run->passed();
+        if ($exitCode !== 0 || $passed === null) {
+            return [sprintf(
+                'kontrola tożsamościowa: pełny zestaw testów pod wrapperem plików wtyczki, bez mutacji, kończy się kodem %s (%s), a wymagany jest kod 0 i same zaliczone testy; zabicia mutantów pokrytych tymi testami są niewiarygodne (#73)',
+                $exitCode ?? 'nieznanym',
+                $run->tests ?? 'brak podsumowania',
+            )];
         }
-        $plain = preg_replace('/\e\[[0-9;?]*[A-Za-z]/', '', $output) ?? $output;
-        $summary = preg_match('/^\s*Tests:\s+(.+?)\s*$/m', $plain, $matches) === 1 ? $matches[1] : 'brak podsumowania';
+        if ($passed !== $expected) {
+            return [sprintf(
+                'kontrola tożsamościowa: pod wrapperem przeszło %d testów, a zestaw początkowy biegu mutacji miał ich %s; kontrola nie objęła tego samego zestawu',
+                $passed,
+                $expected ?? 'nieznaną liczbę',
+            )];
+        }
 
-        return [sprintf(
-            'kontrola tożsamościowa: pełny zestaw testów pod wrapperem plików wtyczki, bez mutacji, kończy się kodem %s (%s); zabicia mutantów pokrytych tymi testami są niewiarygodne (#73)',
-            $exitCode ?? 'nieznanym',
-            $summary,
-        )];
+        return [];
     }
 
     private static function problem(string $file, ?Outcome $outcome): ?string
