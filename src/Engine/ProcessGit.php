@@ -83,6 +83,7 @@ final readonly class ProcessGit implements Git
             throw new EngineException('Nie udało się uruchomić gita.');
         }
 
+        $this->input->close($pipes);
         $output = (string) stream_get_contents($pipes[1]);
         fclose($pipes[1]);
         fclose($pipes[2]);

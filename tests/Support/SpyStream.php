@@ -6,9 +6,8 @@ namespace CityCouriers\Pc\Tests\Support;
 
 /**
  * Protokół strumieni `pcspy://` dla testów skryptu mutacji. Pliki trzyma w pamięci i zapisuje zdarzenia (otwarcie, zapis,
- * zamknięcie). Umie też odczyt, który się nie udaje mimo `is_file()`. Plik `*.stderr` trafia do prawdziwego pliku, bo
- * `proc_open` potrzebuje deskryptora, albo celowo się nie otwiera. Wrapper plików wtyczki mutacji podmienia tylko
- * protokół `file`, więc ten działa tak samo w procesie mutanta.
+ * zamknięcie). Umie też odczyt, który się nie udaje mimo `is_file()`. Wrapper plików wtyczki mutacji podmienia tylko protokół
+ * `file`, więc ten działa tak samo w procesie mutanta.
  */
 final class SpyStream
 {
@@ -23,60 +22,30 @@ final class SpyStream
     /** @var list<string> */
     public static array $events = [];
 
-    /** Każde otwarcie do odczytu (poza `*.stderr`) się nie udaje, choć `is_file()` daje true. */
+    /** Każde otwarcie do odczytu się nie udaje, choć `is_file()` daje true. */
     public static bool $readFails = false;
-
-    /** Plik `*.stderr` się nie otwiera (wtedy `proc_open` zwraca false). */
-    public static bool $stderrFails = false;
-
-    private static string $stderrFile = '';
-
-    /** @var list<resource> deskryptory oddane procesom potomnym, zamykane przy wyrejestrowaniu */
-    private static array $kept = [];
 
     private string $path = '';
 
     private int $position = 0;
 
-    /** @var resource|null */
-    private $real;
-
-    private bool $cast = false;
-
-    /**
-     * @param string $stderrFile prawdziwy plik, do którego trafia każdy `*.stderr`
-     */
-    public static function register(string $stderrFile): void
+    public static function register(): void
     {
         self::$files = [];
         self::$events = [];
         self::$readFails = false;
-        self::$stderrFails = false;
-        self::$stderrFile = $stderrFile;
         stream_wrapper_register(self::PROTOCOL, self::class);
     }
 
     public static function unregister(): void
     {
         stream_wrapper_unregister(self::PROTOCOL);
-        foreach (self::$kept as $resource) {
-            if (is_resource($resource)) {
-                fclose($resource);
-            }
-        }
-        self::$kept = [];
     }
 
     public function stream_open(string $path, string $mode, int $options, ?string &$openedPath): bool
     {
         self::$events[] = "open {$path} {$mode}";
         $this->path = $path;
-        if (str_ends_with($path, '.stderr')) {
-            $real = self::$stderrFails ? false : fopen(self::$stderrFile, $mode);
-            $this->real = $real === false ? null : $real;
-
-            return $real !== false;
-        }
         if (str_contains($mode, 'r') && self::$readFails) {
             return false;
         }
@@ -87,16 +56,6 @@ final class SpyStream
         return true;
     }
 
-    /**
-     * @return resource|false
-     */
-    public function stream_cast(int $castAs)
-    {
-        $this->cast = true;
-
-        return $this->real ?? false;
-    }
-
     public function stream_write(string $data): int
     {
         self::$events[] = 'write ' . strlen($data);
@@ -105,11 +64,8 @@ final class SpyStream
         return strlen($data);
     }
 
-    public function stream_read(int $count): string|false
+    public function stream_read(int $count): string
     {
-        if ($this->real !== null) {
-            return fread($this->real, max(1, $count));
-        }
         $chunk = substr(self::$files[$this->path] ?? '', $this->position, $count);
         $this->position += strlen($chunk);
 
@@ -118,7 +74,7 @@ final class SpyStream
 
     public function stream_eof(): bool
     {
-        return $this->real !== null ? feof($this->real) : $this->position >= strlen(self::$files[$this->path] ?? '');
+        return $this->position >= strlen(self::$files[$this->path] ?? '');
     }
 
     public function stream_flush(): bool
@@ -131,13 +87,6 @@ final class SpyStream
         // Czy zamyka jawne fclose(), czy dopiero zwolnienie zasobu.
         $byFclose = in_array('fclose', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS), 'function'), true);
         self::$events[] = "close {$this->path}" . ($byFclose ? ' fclose' : '');
-        if ($this->real !== null) {
-            if ($this->cast) {
-                self::$kept[] = $this->real;
-            } else {
-                fclose($this->real);
-            }
-        }
     }
 
     /**
@@ -165,6 +114,6 @@ final class SpyStream
     {
         self::$events[] = "unlink {$path}";
 
-        return !str_ends_with($path, '.stderr') || !is_file(self::$stderrFile) || unlink(self::$stderrFile);
+        return true;
     }
 }

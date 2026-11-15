@@ -3,13 +3,14 @@
 declare(strict_types=1);
 
 use CityCouriers\Pc\Dev\Mutation\PestRun;
+use CityCouriers\Pc\Tests\Support\Child;
 use CityCouriers\Pc\Tests\Support\GitRepo;
 use CityCouriers\Pc\Tests\Support\SpyStream;
 use CityCouriers\Pc\Tests\Support\Warnings;
 
 it('log przez protokół strumieni: wyjście w porcjach po 8192 bajty, stderr na końcu, log zamknięty jawnie przez fclose', function (): void {
     $repo = new GitRepo();
-    SpyStream::register($repo->path . '/spy.stderr');
+    SpyStream::register();
     try {
         $code = PestRun::run([PHP_BINARY, '-r', 'echo str_repeat("x", 1 << 20); fwrite(STDERR, "e");'], $repo->path, [], 'pcspy://bieg.log', false);
         $writes = [];
@@ -29,46 +30,7 @@ it('log przez protokół strumieni: wyjście w porcjach po 8192 bajty, stderr na
     }
 });
 
-it('proces, którego nie da się uruchomić (plik stderr się nie otwiera): log zamknięty przed wyjątkiem', function (): void {
-    $repo = new GitRepo();
-    SpyStream::register($repo->path . '/spy.stderr');
-    SpyStream::$stderrFails = true;
-    try {
-        [$message] = Warnings::collect(static function () use ($repo): ?string {
-            try {
-                PestRun::run([PHP_BINARY, '-r', 'echo 1;'], $repo->path, [], 'pcspy://bieg.log', false);
-            } catch (RuntimeException $exception) {
-                return $exception->getMessage();
-            }
-
-            return null;
-        });
-
-        expect($message)->toBe('Nie można uruchomić procesu: ' . PHP_BINARY . ' -r echo 1;')
-            ->and(SpyStream::$events)->toContain('close pcspy://bieg.log fclose');
-    } finally {
-        SpyStream::unregister();
-        $repo->remove();
-    }
-});
-
-it('log usunięty przez proces w trakcie capture: pusty tekst zamiast awarii', function (): void {
-    // Proces znajduje własny plik stderr po losowym znaczniku i usuwa log obok niego (ta sama nazwa bez „.stderr”).
-    $child = <<<'PHP'
-        fwrite(STDERR, $argv[1]);
-        fflush(STDERR);
-        foreach (glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pc-*.stderr') ?: [] as $file) {
-            if (@file_get_contents($file) === $argv[1]) {
-                unlink(substr($file, 0, -strlen('.stderr')));
-            }
-        }
-        PHP;
-    [$result] = Warnings::collect(static fn(): array => PestRun::capture([PHP_BINARY, '-r', $child, bin2hex(random_bytes(8))], sys_get_temp_dir()));
-
-    expect($result)->toBe([0, '']);
-});
-
-it('wyjście procesu trafia do logu w całości (także samo „0”), stderr na końcu, plik stderr znika', function (): void {
+it('wyjście procesu trafia do logu w całości (także samo „0”), stderr na końcu, bez pliku obok logu', function (): void {
     $repo = new GitRepo();
     try {
         $log = $repo->path . '/bieg.log';
@@ -76,27 +38,20 @@ it('wyjście procesu trafia do logu w całości (także samo „0”), stderr na
 
         expect($code)->toBe(0)
             ->and((string) file_get_contents($log))->toBe('0e')
-            ->and(file_exists($log . '.stderr'))->toBeFalse();
+            ->and(array_values(array_diff(scandir($repo->path) ?: [], ['.', '..', '.git'])))->toBe(['bieg.log']);
     } finally {
         $repo->remove();
     }
 });
 
-it('plik stderr usunięty przez proces: log bez stderr zamiast awarii', function (): void {
+it('duży stderr (większy niż bufor rury) nie blokuje procesu i trafia na koniec logu', function (): void {
     $repo = new GitRepo();
     try {
         $log = $repo->path . '/bieg.log';
-        // Odczyt brakującego pliku stderr jest wyciszony w kodzie; PHPUnit i tak widzi takie ostrzeżenie, więc tu zebrane.
-        [$code] = Warnings::collect(static fn(): ?int => PestRun::run(
-            [PHP_BINARY, '-r', 'fwrite(STDERR, "e"); unlink((string) getenv("PC_STDERR")); echo "o";'],
-            $repo->path,
-            ['PC_STDERR' => $log . '.stderr'],
-            $log,
-            false,
-        ));
+        $code = PestRun::run([PHP_BINARY, '-r', 'fwrite(STDERR, str_repeat("e", 1 << 20)); echo "o";'], $repo->path, [], $log, false);
 
         expect($code)->toBe(0)
-            ->and((string) file_get_contents($log))->toBe('o');
+            ->and((string) file_get_contents($log))->toBe('o' . str_repeat('e', 1 << 20));
     } finally {
         $repo->remove();
     }
@@ -105,11 +60,33 @@ it('plik stderr usunięty przez proces: log bez stderr zamiast awarii', function
 it('proces czytający stdin dostaje od razu koniec danych (stdin zamknięty, bez zawieszenia)', function (): void {
     $repo = new GitRepo();
     try {
-        $code = PestRun::run([PHP_BINARY, '-r', 'echo stream_get_contents(STDIN) === "" ? "koniec" : "dane";'], $repo->path, [], $repo->path . '/bieg.log', false);
+        $code = PestRun::run(Child::stdinReader(), $repo->path, [], $repo->path . '/bieg.log', false);
 
         expect($code)->toBe(0)
-            ->and((string) file_get_contents($repo->path . '/bieg.log'))->toBe('koniec');
+            ->and((string) file_get_contents($repo->path . '/bieg.log'))->toBe('0');
     } finally {
+        $repo->remove();
+    }
+});
+
+it('program, którego nie da się uruchomić: log zamknięty jawnie przed wyjątkiem', function (): void {
+    $repo = new GitRepo();
+    SpyStream::register();
+    try {
+        [$message] = Warnings::collect(static function () use ($repo): ?string {
+            try {
+                PestRun::run(['pc-nie-ma-takiego-programu'], $repo->path, [], 'pcspy://bieg.log', false);
+            } catch (RuntimeException $exception) {
+                return $exception->getMessage();
+            }
+
+            return null;
+        });
+
+        expect($message)->toBe('Nie można uruchomić procesu: pc-nie-ma-takiego-programu')
+            ->and(SpyStream::$events)->toContain('close pcspy://bieg.log fclose');
+    } finally {
+        SpyStream::unregister();
         $repo->remove();
     }
 });
@@ -189,4 +166,102 @@ it('program, którego nie da się uruchomić: wyjątek z całym poleceniem', fun
     } finally {
         $repo->remove();
     }
+});
+
+it('log usunięty przez proces w trakcie capture: pusty tekst zamiast awarii', function (): void {
+    // Proces wypisuje losowy znacznik (trafia do pliku logu), a po chwili usuwa plik tymczasowy z tą treścią.
+    $child = <<<'PHP'
+        echo $argv[1];
+        fflush(STDOUT);
+        usleep(700000);
+        foreach (glob(sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'pc-*') ?: [] as $file) {
+            if (@file_get_contents($file) === $argv[1]) {
+                unlink($file);
+            }
+        }
+        PHP;
+    [$result] = Warnings::collect(static fn(): array => PestRun::capture([PHP_BINARY, '-r', $child, bin2hex(random_bytes(8))], sys_get_temp_dir()));
+
+    expect($result)->toBe([0, '']);
+});
+
+it('copy (prywatna): porcje po 8192 bajty, zapis przez log', function (): void {
+    SpyStream::register();
+    try {
+        $source = fopen('php://memory', 'r+') ?: throw new RuntimeException('php://memory');
+        fwrite($source, str_repeat('x', 9000));
+        rewind($source);
+        $log = fopen('pcspy://copy.log', 'wb') ?: throw new RuntimeException('pcspy://copy.log');
+        (new ReflectionMethod(PestRun::class, 'copy'))->invoke(null, $source, $log, false);
+        fclose($log);
+        $writes = array_map(static fn(string $event): int => (int) substr($event, 6), array_values(array_filter(SpyStream::$events, static fn(string $event): bool => str_starts_with($event, 'write '))));
+
+        expect($writes)->toBe([8192, 808]);
+    } finally {
+        SpyStream::unregister();
+    }
+});
+
+it('copy (prywatna): błąd odczytu (fread daje false) kończy kopiowanie bez zapisu i bez wyjątku', function (): void {
+    $path = tempnam(sys_get_temp_dir(), 'pc-');
+    $writeOnly = fopen((string) $path, 'wb') ?: throw new RuntimeException('plik tymczasowy');
+    $log = fopen('php://memory', 'r+') ?: throw new RuntimeException('php://memory');
+    try {
+        [, $warnings] = Warnings::collect(static function () use ($writeOnly, $log): void {
+            (new ReflectionMethod(PestRun::class, 'copy'))->invoke(null, $writeOnly, $log, false);
+        });
+        rewind($log);
+
+        expect(stream_get_contents($log))->toBe('')
+            ->and($warnings)->not->toBe([]);
+    } finally {
+        fclose($writeOnly);
+        unlink((string) $path);
+    }
+});
+
+it('brak pliku tymczasowego (tmpfile i tempnam zwracają false) to wyjątek, a log jest zamknięty jawnie', function (): void {
+    // Katalog tymczasowy PHP jest zapamiętany w procesie, więc brak pliku tymczasowego wywołujemy wyczerpaniem deskryptorów
+    // (kopie stdout przez php://fd/1, bez protokołu file); log idzie przez SpyStream, który deskryptora nie zajmuje.
+    $thrown = static function (Closure $run): string {
+        try {
+            $run();
+        } catch (Throwable $exception) {
+            return $exception::class . ': ' . $exception->getMessage();
+        }
+
+        return 'bez wyjątku';
+    };
+    $program = [PHP_BINARY, '-r', 'echo "x";'];
+    $directory = sys_get_temp_dir();
+    SpyStream::register();
+    try {
+        // Rozgrzewka: po wyczerpaniu deskryptorów autoload nie ma czym otworzyć pliku klasy.
+        PestRun::run($program, $directory, [], 'pcspy://rozgrzewka.log', false);
+        PestRun::capture($program, $directory);
+        [$result] = Warnings::collect(static function () use ($thrown, $program, $directory): array {
+            $handles = [];
+            try {
+                while (($handle = fopen('php://fd/1', 'wb')) !== false) {
+                    $handles[] = $handle;
+                }
+                SpyStream::$events = [];
+                $run = $thrown(static fn() => PestRun::run($program, $directory, [], 'pcspy://bieg.log', false));
+                $events = SpyStream::$events;
+                $capture = $thrown(static fn() => PestRun::capture($program, $directory));
+            } finally {
+                foreach ($handles as $handle) {
+                    fclose($handle);
+                }
+            }
+
+            return [$run, $events, $capture];
+        });
+    } finally {
+        SpyStream::unregister();
+    }
+
+    expect($result[0])->toBe('RuntimeException: Nie można utworzyć pliku tymczasowego na stderr.')
+        ->and($result[1])->toBe(['open pcspy://bieg.log wb', 'close pcspy://bieg.log fclose'])
+        ->and($result[2])->toBe('RuntimeException: Nie można utworzyć pliku tymczasowego.');
 });

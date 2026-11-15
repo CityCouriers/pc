@@ -15,6 +15,14 @@ Pełny opis: [docs/wydania.md](docs/wydania.md).
 
 ### Fixed
 
+- Stdin procesów potomnych (`EmptyInput`, `ProcessGit`, `SubProcess`, helper testów `Child`) to rurka zamykana zaraz po
+  uruchomieniu zamiast urządzenia `NUL` albo `/dev/null` przez protokół `file`: wtyczka Pest Mutate podmienia wrapper
+  strumieni tego protokołu w procesie mutanta i testy z procesami potomnymi kończyły się ostrzeżeniem, więc kontrola
+  tożsamościowa `composer mutate` odrzucała bieg (zgłoszenie #73). Zachowanie bez zmian: proces dostaje EOF i nie dziedziczy
+  stdin rodzica. Polityka testów (`ChildProcessPolicyTest`) odrzuca stdin przez `file` i wymaga zamknięcia rurki.
+  Stderr w `PestRun::run` (skrypt mutacji) idzie do `tmpfile()`, nie do pliku przez protokół `file`: pod wrapperem
+  wtyczki ginął i padały trzy testy skryptu. Kontrola tożsamościowa pod wrapperem: 0 ostrzeżeń, 0 niezaliczonych, kod 0.
+  Narzędzia deweloperskie i testy, bez zmiany SemVer paczki.
 - Workflow GitHub Actions po przeglądzie narzędziami (actionlint, zizmor w trybie pedantic, yamllint, check-jsonschema,
   pinact, ShellCheck): `persist-credentials: false` w checkoutach, akcje przypięte do SHA z komentarzem wersji,
   uprawnienia na poziomie jobów z uzasadnieniem, nazwy jobów, `concurrency` dla `pr-title` i `Release`, cooldown
