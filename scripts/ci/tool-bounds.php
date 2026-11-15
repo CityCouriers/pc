@@ -15,15 +15,15 @@ declare(strict_types=1);
  */
 
 /**
- * Najniższa dolna granica ograniczenia (trzy człony). Obsługujemy tylko `^X.Y.Z`, `~X.Y.Z`, `>=X.Y.Z` i `X.Y.Z`
- * (też alternatywy `||`); wszystko inne (wersje deweloperskie i wstępne, górne granice, ograniczenia wieloczłonowe, `*`)
+ * Najniższa dolna granica ograniczenia (trzy człony). Obsługujemy wyłącznie zakres `^X.Y.Z` (polityka #71)
+ * i alternatywy `||` takich zakresów; wszystko inne (`>=`, `~`, wersja dokładna, wersje deweloperskie i wstępne, górne granice, `*`)
  * to null, czyli brak pewnej dolnej granicy, i wymaga wpisu wyjątku.
  */
 function lowerBound(string $constraint): ?string
 {
     $bounds = [];
     foreach (preg_split('/\s*\|\|?\s*/', trim($constraint)) ?: [] as $alternative) {
-        if (preg_match('/^(?:\^|~|>=)?v?(\d+(?:\.\d+){0,2})$/', $alternative, $found) !== 1) {
+        if (preg_match('/^\^(\d+(?:\.\d+){0,2})$/', $alternative, $found) !== 1) {
             return null;
         }
         $bounds[] = padVersion($found[1]);

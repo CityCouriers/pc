@@ -125,3 +125,16 @@ it('ograniczenie z górną granicą, wieloczłonowe albo gwiazdka to nieobsługi
 
     expect($exit)->toBe(1)->and($output)->toContain('a/b: ograniczenie "' . $constraint . '" bez pewnej dolnej granicy');
 })->with(['>=5.3.5 <6.0', '>=5.3.5,<6.0', '5.*', '*', '^5.3.5@dev']);
+
+it('tylko zakres ^ jest przyjęty: >=, ~ i wersja dokładna równe najnowszej stabilnej dają kod 1', function (string $constraint): void {
+    [$exit, $output] = runBounds(['a/b' => $constraint], ['a/b' => '5.3.5'], ['a/b' => '5.3.5']);
+
+    expect($exit)->toBe(1)->and($output)->toContain('a/b: ograniczenie "' . $constraint . '" bez pewnej dolnej granicy');
+})->with(['>=5.3.5', '~5.3.5', '5.3.5', 'v5.3.5']);
+
+it('zakres ^ równy najnowszej stabilnej jest przyjęty, a wpis wyjątku zwalnia inne składnie', function (): void {
+    [$accepted] = runBounds(['a/b' => '^5.3.5'], ['a/b' => '5.3.5'], ['a/b' => '5.3.5']);
+    [$excepted] = runBounds(['a/b' => '>=5.3.5'], ['a/b' => '5.3.5'], ['a/b' => '5.3.5'], ['a/b' => 'powód']);
+
+    expect($accepted)->toBe(0)->and($excepted)->toBe(0);
+});
