@@ -12,9 +12,9 @@
     "require-dev": {
         "laravel/pint": "^1.32.3",
         "pdepend/pdepend": "^3.1.0",
-        "pestphp/pest": "^5.3.6",
+        "pestphp/pest": "^5.3.7",
         "phpmd/phpmd": "^3.0.0",
-        "phpstan/phpstan": "^2.3.5"
+        "phpstan/phpstan": "^2.3.7"
     },
     "autoload": {
         "psr-4": {
